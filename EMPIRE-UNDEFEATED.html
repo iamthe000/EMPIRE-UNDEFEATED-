@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>皇国無敗!! 焦土作戦を実行せよ!!</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #222;
+            color: #fff;
+            font-family: "Hiragino Mincho ProN", "Yu Mincho", serif; /* 雰囲気重視のフォント */
+            user-select: none;
+        }
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+        h1 {
+            text-align: center;
+            color: #d00;
+            text-shadow: 2px 2px #fff;
+            margin: 0;
+            font-size: 2rem;
+            letter-spacing: 0.2em;
+        }
+        #status-bar {
+            background: rgba(0, 0, 0, 0.7);
+            border: 2px solid #fff;
+            padding: 10px;
+            text-align: center;
+            font-size: 1.2rem;
+        }
+        .kamikaze-btn {
+            pointer-events: auto;
+            background: linear-gradient(to bottom, #fff, #ccc);
+            color: #d00;
+            border: 5px double #d00;
+            font-size: 3rem;
+            font-weight: bold;
+            padding: 20px 50px;
+            cursor: pointer;
+            display: none; /* 条件を満たすまで非表示 */
+            animation: pulse 1s infinite;
+            font-family: serif;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        #message-log {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            color: #ff0;
+            font-size: 14px;
+            text-shadow: 1px 1px #000;
+            pointer-events: none;
+        }
+        /* 勝利画面 */
+        #victory-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: white;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: red;
+            z-index: 100;
+        }
+        #victory-screen h1 {
+            font-size: 5rem;
+            border: 10px solid red;
+            padding: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div id="ui-layer">
+        <div>
+            <h1>皇国無敗!! 焦土作戦を実行せよ!!</h1>
+            <div id="status-bar">
+                作戦目標: 全地方都市の焦土化(クリック) 及び 全師団の帝都集結<br>
+                焦土化率: <span id="burn-rate">0%</span> | 帝都防衛率: <span id="defense-rate">0%</span>
+            </div>
+        </div>
+        
+        <div style="text-align: center;">
+            <button id="kamikaze-btn" class="kamikaze-btn">神風発動</button>
+        </div>
+
+        <div id="message-log">
+            大本営発表: 本土決戦ニ備エヨ...
+        </div>
+    </div>
+
+    <div id="victory-screen">
+        <h1>皇国無敗!!</h1>
+        <p style="color:black; font-size:2rem; font-weight:bold;">敵艦隊ハ消滅セリ!!</p>
+        <p style="color:black;">(リロードシテ再ビ任務ニ就ケ)</p>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const burnRateEl = document.getElementById('burn-rate');
+        const defenseRateEl = document.getElementById('defense-rate');
+        const kamikazeBtn = document.getElementById('kamikaze-btn');
+        const victoryScreen = document.getElementById('victory-screen');
+        const msgLog = document.getElementById('message-log');
+
+        let width, height;
+        
+        // ゲーム定数
+        const CITY_COUNT = 8;
+        const UNIT_COUNT = 20;
+        const CAPITAL_RADIUS = 150; // 防衛圏
+        const CLICK_TO_BURN = 3; // 焦土化に必要なステップ数
+
+        // ゲーム状態
+        const state = {
+            cities: [],
+            units: [],
+            capital: { x: 0, y: 0 },
+            selectionBox: { startX: 0, startY: 0, endX: 0, endY: 0, active: false },
+            isVictory: false,
+            windActive: false
+        };
+
+        // 初期化
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            state.capital = { x: width / 2, y: height / 2 };
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        function log(msg) {
+            msgLog.innerHTML = `大本営発表: ${msg}<br>${msgLog.innerHTML}`;
+        }
+
+        class City {
+            constructor() {
+                // 画面端の方にランダム配置（中央は避ける）
+                let angle = Math.random() * Math.PI * 2;
+                let dist = Math.min(width, height) * 0.35 + Math.random() * 100;
+                this.x = width/2 + Math.cos(angle) * dist;
+                this.y = height/2 + Math.sin(angle) * dist;
+                this.hp = CLICK_TO_BURN;
+                this.maxHp = CLICK_TO_BURN;
+            }
+
+            draw() {
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+
+                if (this.hp <= 0) {
+                    // 焦土化済み
+                    ctx.fillStyle = "#333";
+                    ctx.fillRect(this.x - 20, this.y - 20, 40, 40);
+                    ctx.fillStyle = "#555";
+                    ctx.font = "12px serif";
+                    ctx.fillText("焦土", this.x, this.y);
+                    
+                    // 煙エフェクト（簡易）
+                    if(Math.random() > 0.5) {
+                        ctx.fillStyle = `rgba(100,100,100,${Math.random()})`;
+                        ctx.fillRect(this.x - 10 + Math.random()*20, this.y - 20 - Math.random()*30, 5, 5);
+                    }
+                } else {
+                    // 通常都市
+                    ctx.fillStyle = "#fff";
+                    ctx.fillRect(this.x - 20, this.y - 20, 40, 40);
+                    ctx.fillStyle = "#000";
+                    ctx.font = "20px serif";
+                    ctx.fillText("市", this.x, this.y);
+                    
+                    // HPバー
+                    ctx.fillStyle = "red";
+                    ctx.fillRect(this.x - 20, this.y - 30, 40 * (this.hp / this.maxHp), 5);
+                }
+            }
+        }
+
+        class Unit {
+            constructor() {
+                // ランダム配置
+                this.x = Math.random() * width;
+                this.y = Math.random() * height;
+                this.targetX = this.x;
+                this.targetY = this.y;
+                this.selected = false;
+                this.speed = 2;
+                this.angle = 0;
+            }
+
+            update() {
+                const dx = this.targetX - this.x;
+                const dy = this.targetY - this.y;
+                const dist = Math.sqrt(dx*dx + dy*dy);
+                
+                if (dist > this.speed) {
+                    this.x += (dx / dist) * this.speed;
+                    this.y += (dy / dist) * this.speed;
+                    this.angle = Math.atan2(dy, dx);
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                
+                // 選択時のハイライト
+                if (this.selected) {
+                    ctx.strokeStyle = "#0f0";
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.arc(0, 0, 12, 0, Math.PI * 2);
+                    ctx.stroke();
+                }
+
+                // 本体（師団）
+                ctx.rotate(this.angle);
+                ctx.fillStyle = "#d00"; // 皇軍カラー
+                ctx.beginPath();
+                ctx.moveTo(10, 0);
+                ctx.lineTo(-5, 5);
+                ctx.lineTo(-5, -5);
+                ctx.fill();
+                
+                ctx.restore();
+            }
+        }
+
+        // 初期生成
+        function initGame() {
+            for (let i = 0; i < CITY_COUNT; i++) state.cities.push(new City());
+            for (let i = 0; i < UNIT_COUNT; i++) state.units.push(new Unit());
+        }
+        initGame();
+
+        // 操作系
+        canvas.addEventListener('mousedown', e => {
+            if (e.button === 0) { // 左クリック
+                // 都市のクリック判定
+                let clickedCity = false;
+                state.cities.forEach(city => {
+                    if (city.hp > 0 && Math.abs(e.clientX - city.x) < 25 && Math.abs(e.clientY - city.y) < 25) {
+                        city.hp--;
+                        clickedCity = true;
+                        if (city.hp === 0) log("都市ノ機能ヲ完全ニ破壊セリ！");
+                        else if (city.hp === 2) log("破壊工作ヲ開始！");
+                    }
+                });
+
+                if (!clickedCity) {
+                    // ボックス選択開始
+                    state.selectionBox.active = true;
+                    state.selectionBox.startX = e.clientX;
+                    state.selectionBox.startY = e.clientY;
+                    state.selectionBox.endX = e.clientX;
+                    state.selectionBox.endY = e.clientY;
+                }
+            } else if (e.button === 2) { // 右クリック
+                e.preventDefault();
+                // 移動指示
+                let count = 0;
+                state.units.forEach(u => {
+                    if (u.selected) {
+                        // 少しばらけさせる
+                        const offsetX = (Math.random() - 0.5) * 50;
+                        const offsetY = (Math.random() - 0.5) * 50;
+                        u.targetX = e.clientX + offsetX;
+                        u.targetY = e.clientY + offsetY;
+                        count++;
+                    }
+                });
+                if(count > 0) log(`${count} 個師団ニ転進命令！`);
+            }
+        });
+
+        canvas.addEventListener('mousemove', e => {
+            if (state.selectionBox.active) {
+                state.selectionBox.endX = e.clientX;
+                state.selectionBox.endY = e.clientY;
+            }
+        });
+
+        canvas.addEventListener('mouseup', e => {
+            if (state.selectionBox.active) {
+                // 選択処理
+                const sx = Math.min(state.selectionBox.startX, state.selectionBox.endX);
+                const sy = Math.min(state.selectionBox.startY, state.selectionBox.endY);
+                const ex = Math.max(state.selectionBox.startX, state.selectionBox.endX);
+                const ey = Math.max(state.selectionBox.startY, state.selectionBox.endY);
+
+                state.units.forEach(u => {
+                    u.selected = (u.x >= sx && u.x <= ex && u.y >= sy && u.y <= ey);
+                });
+
+                state.selectionBox.active = false;
+            }
+        });
+
+        canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+        // 神風ボタン処理
+        kamikazeBtn.addEventListener('click', () => {
+            state.windActive = true;
+            log("神風ガ吹キ荒レル！好機到レル！");
+            
+            // 演出アニメーション開始
+            let flashCount = 0;
+            const flashInterval = setInterval(() => {
+                document.body.style.backgroundColor = flashCount % 2 === 0 ? "#fff" : "#222";
+                flashCount++;
+                if (flashCount > 10) {
+                    clearInterval(flashInterval);
+                    victoryScreen.style.display = "flex";
+                }
+            }, 100);
+        });
+
+        // ループ
+        function loop() {
+            // 背景クリア
+            ctx.fillStyle = "#222";
+            ctx.fillRect(0, 0, width, height);
+
+            // 帝都（防衛ライン）描画
+            ctx.beginPath();
+            ctx.arc(state.capital.x, state.capital.y, CAPITAL_RADIUS, 0, Math.PI * 2);
+            ctx.strokeStyle = "rgba(255, 255, 255, 0.2)";
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            
+            ctx.fillStyle = "#fff";
+            ctx.font = "30px serif";
+            ctx.fillText("★帝都", state.capital.x, state.capital.y);
+
+            // 都市描画
+            let burntCount = 0;
+            state.cities.forEach(city => {
+                city.draw();
+                if (city.hp <= 0) burntCount++;
+            });
+
+            // ユニット更新・描画
+            let unitsInDefense = 0;
+            state.units.forEach(u => {
+                u.update();
+                u.draw();
+
+                // 防衛圏内判定
+                const d = Math.sqrt((u.x - state.capital.x)**2 + (u.y - state.capital.y)**2);
+                if (d < CAPITAL_RADIUS) unitsInDefense++;
+            });
+
+            // 選択ボックス描画
+            if (state.selectionBox.active) {
+                ctx.strokeStyle = "#0f0";
+                ctx.lineWidth = 1;
+                ctx.strokeRect(
+                    state.selectionBox.startX,
+                    state.selectionBox.startY,
+                    state.selectionBox.endX - state.selectionBox.startX,
+                    state.selectionBox.endY - state.selectionBox.startY
+                );
+            }
+
+            // UI更新
+            const burnPct = Math.floor((burntCount / CITY_COUNT) * 100);
+            const defPct = Math.floor((unitsInDefense / UNIT_COUNT) * 100);
+            burnRateEl.innerText = burnPct + "%";
+            defenseRateEl.innerText = defPct + "%";
+
+            // 神風条件判定
+            if (!state.windActive && burnPct === 100 && defPct === 100) {
+                kamikazeBtn.style.display = "block";
+            }
+
+            requestAnimationFrame(loop);
+        }
+
+        loop();
+
+    </script>
+</body>
+</html>
